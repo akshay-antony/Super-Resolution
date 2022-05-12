@@ -151,3 +151,4 @@ if __name__ == '__main__':
 	y = trial(x)
 	print(y.shape)
 
+s
