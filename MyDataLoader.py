@@ -52,8 +52,11 @@ class MyDatasetRange(Dataset):
 		return len(self.filename)
 
 class MyDataset_without_BEV(Dataset):
-	def __init__(self, filename="/home/akshay/bag/bev_16_np", basepath="/home/akshay/bag"):
-		self.filename = sorted(os.listdir(filename))
+	def __init__(self, 
+				 basepath="./bag",
+				 image_folder_name="range_16_1024",
+				 lidar_filename="lidar16_org_full"):
+		self.filename = sorted(os.listdir(os.path.join(basepath, image_folder_name)))
 		self.basepath = basepath
 
 	def __getitem__(self, idx):
