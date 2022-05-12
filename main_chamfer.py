@@ -16,46 +16,53 @@ if torch.cuda.is_available():
 
 def train(epochs=20,
 		  train_loader=None,
-		  loss_fn=None,
+		  loss_fn1=None,
 		  model=None,
 		  optimizer=None,
 		  val_freq=5,
 		  test_loader=None,
-		  print_freq=500):
+		  print_freq=500,
+		  loss_fn2=None):
 	
 	for i in range(epochs):
-		losses = 0
-		total_losses = 0
+		chamfer_losses = 0
+		l1_losses = 0
 		no_data = 0
-		b_no = 1
-
-
+		model = model.train()
 		for j, batch_data in tqdm(enumerate(train_loader),
 								  total=len(train_loader),
 								  leave=False):
-			input_image = batch_data['range_16'].to(device)
-			output_image = batch_data['range_64'].to(device)
+			input_range = batch_data['range_16'].to(device)
+			label_range = batch_data['range_64'].to(device)
 			label_pcd = batch_data['pcd_64']
-			output = model(input_image)
-			loss = loss_fn(output, label_pcd)
+			batch_size = input_range.shape[0]
+			pred_pcd, pred_range = model(input_range)
+			chamfer_loss = loss_fn1(pred_pcd, label_pcd)
+			l1_loss = loss_fn2(pred_range, label_range)
+			loss = chamfer_loss + l1_loss
+			
+			optimizer.zero_grad()		
 			loss.backward()
 			optimizer.step()
-			optimizer.zero_grad()		
 			
-			total_losses += loss.item() * input_image.shape[0]
-			no_data += input_image.shape[0]
+			chamfer_losses += chamfer_loss.item() * batch_size
+			l1_losses += l1_loss.item() * batch_size
+			no_data += batch_size
 			torch.cuda.empty_cache()
 
 			if no_data % print_freq == 0 and no_data != 0:
-				print("Batch {}/{} loss: {}".format(j, 
-													len(train_loader), 
-													round(total_losses / no_data, 2)))
-													
+				print("Batch {}/{}, l1 loss: {}, chamfer loss: {}".format(j, 
+														len(train_loader), 
+														round(l1_losses / no_data, 2), 
+														round(chamfer_losses / no_data, 2)))
 			
 		if i % val_freq == 0:
-			test(model, test_loader, loss_fn)
+			test(model, test_loader, loss_fn1, loss_fn2, i)
 
-		print("\n","epoch=", i, "loss:=", total_losses / no_data)
+		print("Batch {}/{}, Epoch l1 loss: {}, Epoch chamfer loss: {}".format(j, 
+														len(train_loader), 
+														round(l1_losses / no_data, 2), 
+														round(chamfer_losses / no_data, 2)))
 
 	checkpoint = {
 	  'epoch': i + 1,
@@ -63,29 +70,40 @@ def train(epochs=20,
 	  'optimizer': optimizer.state_dict(),
 	}
 
-	torch.save(checkpoint, "/home/akshay/python_carla/weights/checkpoint_dec_3.pth")
+	torch.save(checkpoint, "./training_info.pth")
 	
 
 def test(model,
          test_loader,
-		 loss_fn):
-	total_losses = 0
+		 loss_fn1,
+		 loss_fn2,
+		 epoch):
+	chamfer_losses = 0
+	l1_losses = 0
 	data_count = 0
-	model.eval()
+	model = model.eval()
 	for i, data in tqdm(enumerate(test_loader)):
-		input_image = data['range_16'].to(device)
+		input_range = data['range_16'].to(device)
+		label_range = data['range_64'].to(device)
 		label_pcd = data['pcd_64'].to(device)
-		pred_pcd = model(input_image)
-		loss = loss_fn(pred_pcd, label_pcd)
-		total_losses += loss.item()
-		data_count += input_image.shape[0]
-	print("Test loss: ", total_losses / data_count)
-	model.train()
+
+		curr_batch_size = input_range.shape[0]
+		pred_pcd, pred_range = model(input_range)
+		chamfer_loss = loss_fn1(pred_pcd, label_pcd)
+		l1_loss = loss_fn2(pred_range, label_range)
+		chamfer_losses += chamfer_loss.item() * curr_batch_size
+		l1_losses += l1_loss.item() * curr_batch_size
+		data_count += curr_batch_size
+	print("Epoch {}: Test l1 loss: {}, Test chamfer loss{} ".format(epoch,
+																	round(l1_losses / data_count, 2),
+																	round(chamfer_losses / data_count, 2)))
+	model = model.train()
 
 if __name__ == '__main__':
 	epochs = 20
 	batch_size = 8
-	loss_fn = chamfer_distance()
+	loss_fn1 = chamfer_distance()
+	loss_fn2 = nn.L1Loss()
 	dataset = MyDatasetChamferDistance(is_chamfer=True)
 	model = Network_1024_without_bev()
 	lr = 0.0001
@@ -104,6 +122,7 @@ if __name__ == '__main__':
 
 	train(epochs=epochs,
 		  train_loader=train_loader,
-		  loss_fn=loss_fn,
+		  loss_fn1=loss_fn1,
+		  loss_fn2=loss_fn2,
 		  model=model,
 		  optimizer=optimizer)
