@@ -110,7 +110,7 @@ def UNet():
     y4 = conv_block(y4, filters*16)
     y4 = Dropout(dropout_rate)(y4, training=True)
     y4 = up_block(y4, filters*8, strides=(2,2))
- 
+    
     y3 = concatenate([x4, y4], axis=3)
     y3 = conv_block(y3, filters*8)
     y3 = Dropout(dropout_rate)(y3, training=True)

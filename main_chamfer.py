@@ -37,7 +37,7 @@ def train(epochs=20,
 			label_pcd = batch_data['pcd_64']
 			batch_size = input_range.shape[0]
 			pred_pcd, pred_range = model(input_range)
-			chamfer_loss = loss_fn1(pred_pcd, label_pcd)
+			chamfer_loss = torch.tensor([0]).cuda() if loss_fn1 == None else (pred_pcd, label_pcd)
 			l1_loss = loss_fn2(pred_range, label_range)
 			loss = chamfer_loss + l1_loss
 			
@@ -78,6 +78,7 @@ def test(model,
 		 loss_fn1,
 		 loss_fn2,
 		 epoch):
+	loss_fn1 = chamfer_loss() if loss_fn1 == None else loss_fn1
 	chamfer_losses = 0
 	l1_losses = 0
 	data_count = 0
