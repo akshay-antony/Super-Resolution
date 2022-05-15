@@ -1,3 +1,4 @@
+from tkinter.messagebox import NO
 import numpy as np
 from sklearn import datasets 
 import torch
@@ -30,10 +31,10 @@ def train(epochs=20,
           test_loader=None,
           print_freq=20,
           loss_fn2=None,
-          range_2_pcd=None):
+          range_2_pcd=None,
+          scheduler=None):
     
     test(model, test_loader, loss_fn1, loss_fn2, 0, range_2_pcd)
-
     for i in range(epochs):
         chamfer_losses = 0
         l1_losses = 0
@@ -67,7 +68,7 @@ def train(epochs=20,
             torch.cuda.empty_cache()
 
             if j % print_freq == 0 and j != 0:
-                print("Batch {}/{}, l1 loss: {}, chamfer loss: {}, total_scaled_loss{} "
+                print("Batch {}/{}, l1 loss: {}, chamfer loss: {}, total_scaled_loss: {} "
                                                  .format(j, 
                                                         len(train_loader), 
                                                         round(l1_losses / no_data, 4), 
@@ -86,15 +87,15 @@ def train(epochs=20,
 
         if i % val_freq == 0:
             test(model, test_loader, loss_fn1, loss_fn2, i, range_2_pcd)
+        scheduler.step()
 
-    checkpoint = {
-      'epoch': i + 1,
-      'state_dict': model.state_dict(),
-      'optimizer': optimizer.state_dict(),
-    }
+        checkpoint = {
+        'epoch': i + 1,
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        }
 
-    torch.save(checkpoint, "./training_info.pth")
-    
+        torch.save(checkpoint, "./training_info_with_chamfer.pth")
 
 def test(model,
          test_loader,
@@ -120,7 +121,7 @@ def test(model,
             pred_pcd = range_2_pcd.convert_range_to_pcd(pred_range.clone())
             chamfer_loss_val = loss_fn1(pred_pcd, label_pcd)[0]
 
-            if i % 50 == 0:
+            if i % 20 == 0:
                 plot_3d(pred_pcd[0], range_2_pcd, "pred")
                 plot_3d(label_pcd[0], range_2_pcd, "gt")
 
@@ -130,7 +131,7 @@ def test(model,
             data_count += curr_batch_size
             torch.cuda.empty_cache()
 
-    print("Epoch {}: Test l1 loss: {}, Test chamfer loss {} ".format(epoch,
+    print("\nEpoch {}: Test l1 loss: {}, Test chamfer loss {} \n".format(epoch,
                                                                     round(l1_losses / data_count, 4),
                                                                     round(chamfer_losses / data_count, 4)))
     wandb.log({"Test_l1_loss": l1_losses / data_count,
@@ -139,34 +140,38 @@ def test(model,
     model = model.train()
 
 if __name__ == '__main__':
-    wandb.init(project="Super-Resolution-normal")
+    wandb.init(project="Super-Resolution-Chamfer")
 
     parser = argparse.ArgumentParser(description="Super Res")
     parser.add_argument("--data_name",
                         default="ouster",
                         choices=["ouster", "vlp"])
+    parser.add_argument("--lr",
+                        default=0.001)
+    parser.add_argument("--batch_size",
+                        default=32,
+                        type=int)
     args = parser.parse_args()
 
     epochs = 20
-    batch_size = 32
+    batch_size = args.batch_size
     loss_fn1 = chamfer_distance
     loss_fn2 = nn.L1Loss()
     
     model = Model()
     range_2_pcd = RangeToPCD(image_rows=64)
     model = model.to(device)
-    lr = 0.001
+    lr = args.lr
     optimizer = torch.optim.Adam(model.parameters(), lr)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+                                                     milestones=[2],
+                                                     gamma=0.1)
 
     if args.data_name == "ouster":
         print("Loading Ouster Dataset...")
         max_range = 80
-        dataset = OusterLidar()
-        train_dataset_length = int(0.80 * len(dataset))
-        train_dataset, test_dataset = random_split(dataset, 
-                                                  [train_dataset_length,
-                                                   len(dataset) - train_dataset_length],
-                                                  generator=torch.Generator().manual_seed(100))
+        train_dataset = OusterLidar(is_train=True)
+        test_dataset = OusterLidar(is_train=False)
     else:
         print("Loading VLP Dataset...")
         train_dataset = MyDatasetChamferDistance(is_chamfer=True,
@@ -174,7 +179,7 @@ if __name__ == '__main__':
         test_dataset = MyDatasetChamferDistance(is_chamfer=True,
                                                 is_train=False)
     train_loader = DataLoader(train_dataset,
-                              batch_size=8,
+                              batch_size=batch_size,
                               shuffle=True,
                               num_workers=4)
     test_loader = DataLoader(test_dataset,
@@ -189,4 +194,5 @@ if __name__ == '__main__':
           model=model,
           optimizer=optimizer,
           test_loader=test_loader,
-          range_2_pcd=range_2_pcd)
+          range_2_pcd=range_2_pcd,
+          scheduler=scheduler)

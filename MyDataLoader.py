@@ -147,13 +147,27 @@ def add_gaussian_noise(data,
 
 class OusterLidar(Dataset):
     def __init__(self, 
-                range_folder_name="./bag/range_{}_ouster/",
-                pcd_folder_name="./bag/pcd_ouster/"):
+                range_folder_name="./bag/ouster/range_{}_",
+                pcd_folder_name="./bag/ouster/pcd_ouster",
+                is_train=True
+                ):
+        if is_train:
+            print("Train Dataset")
+            range_folder_name += "train"
+            pcd_folder_name += "_train"
+        else:
+            print("Test Dataset")
+            range_folder_name += "test"
+            pcd_folder_name += "_test"
 
         self.pcd_folder_name = pcd_folder_name
         self.range_16_foldername = range_folder_name.format('16')
         self.range_64_foldername = range_folder_name.format('64')
-        
+        assert(len(os.listdir(self.range_16_foldername)) == \
+               len(os.listdir(self.range_64_foldername)) == \
+               len(os.listdir(self.pcd_folder_name)))
+        print("Found: ", self.__len__(), "files ")
+
     def __getitem__(self, index):
         range_16 = np.load(os.path.join(self.range_16_foldername,
                                         str(index) + ".npy"))
