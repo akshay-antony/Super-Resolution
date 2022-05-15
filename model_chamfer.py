@@ -61,7 +61,7 @@ class Model(nn.Module):
     def __init__(self,
                  num_upblocks=2,
                  in_channels=1,
-                 dropout_rate=0,
+                 dropout_rate=0.25,
                  encoder_channel_list=[64, 64*2, 64*4,
                                64*8, 64*16],
                  decoder_channel_list=[64*16, 64*8, 64*4,
