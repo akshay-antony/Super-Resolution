@@ -1,6 +1,7 @@
 from tkinter.messagebox import NO
 import numpy as np
-from sklearn import datasets 
+from sklearn import datasets
+from tomlkit import item 
 import torch
 from yaml import parse 
 from model_chamfer import Model
@@ -32,13 +33,15 @@ def train(epochs=20,
           print_freq=20,
           loss_fn2=None,
           range_2_pcd=None,
-          scheduler=None):
+          scheduler=None,
+          loss_fn3=None):
     
-    test(model, test_loader, loss_fn1, loss_fn2, 0, range_2_pcd)
+    test(model, test_loader, loss_fn1, loss_fn2, 0, range_2_pcd, loss_fn3=loss_fn3)
     for i in range(epochs):
         chamfer_losses = 0
         l1_losses = 0
         scaled_losses = 0
+        bce_losses = 0
         no_data = 0
         model = model.train()
         for j, batch_data in tqdm(enumerate(train_loader),
@@ -47,13 +50,20 @@ def train(epochs=20,
             input_range = batch_data['range_16'].to(device)
             label_range = batch_data['range_64'].to(device)
             label_pcd = batch_data['pcd_64'].to(device)
+            val_label = batch_data['val_64'].to(torch.float32).to(device).reshape(label_pcd.shape[0], -1)
+            
             batch_size = input_range.shape[0]
             pred_range = model(input_range)
+            scaled_pred_range = pred_range * range_2_pcd.max_range
+            val_pred = torch.ones_like(scaled_pred_range).to(torch.float32)
+            val_pred[scaled_pred_range > range_2_pcd.max_range] = 0
+            val_pred[scaled_pred_range < range_2_pcd.min_range] = 0 
+            val_pred = val_pred.reshape(val_pred.shape[0], -1).to(device)
+
+            bce_loss = loss_fn3(val_pred, val_label)
             l1_loss = loss_fn2(pred_range, label_range)
             pred_pcd = range_2_pcd.convert_range_to_pcd(pred_range.clone())
-            #chamfer_loss = torch.tensor([0]).cuda() if loss_fn1 == None else 0
-            chamfer_loss_val = loss_fn1(label_pcd, pred_pcd)[0]
-            
+            chamfer_loss_val = loss_fn1(label_pcd, pred_pcd)[0]            
             #loss = chamfer_loss + l1_loss
             loss = l1_loss + torch.sqrt(chamfer_loss_val) / 80
 
@@ -64,18 +74,21 @@ def train(epochs=20,
             chamfer_losses += chamfer_loss_val.item() * batch_size
             l1_losses += l1_loss.item() * batch_size
             scaled_losses += loss.item() * batch_size
+            bce_losses += bce_loss.item() * batch_size
             no_data += batch_size
             torch.cuda.empty_cache()
 
             if j % print_freq == 0 and j != 0:
-                print("Batch {}/{}, l1 loss: {}, chamfer loss: {}, total_scaled_loss: {} "
+                print("Batch {}/{}, l1 loss: {}, chamfer loss: {}, bce loss: {}, total_scaled_loss: {} "
                                                  .format(j, 
                                                         len(train_loader), 
                                                         round(l1_losses / no_data, 4), 
                                                         round(chamfer_losses / no_data, 4),
+                                                        round(bce_losses / no_data),
                                                         round(scaled_losses / no_data, 4)))
                 wandb.log({"Train_l1_loss": l1_losses / no_data,
                            "Train_chamfer_loss": chamfer_losses / no_data,
+                           "Train bce loss": bce_losses / no_data,
                            "step": i * len(train_loader)+j})
 
         print("Epoch {}, Epoch l1 loss: {}, Epoch chamfer loss: {}".format(i, 
@@ -83,10 +96,11 @@ def train(epochs=20,
                                                         round(chamfer_losses / no_data, 4)))
         wandb.log({"Train_l1_loss": l1_losses / no_data,
                    "Train_chamfer_loss": chamfer_losses / no_data,
+                   "Train bce loss": bce_losses / no_data,
                    "step": i * len(train_loader)+j})
 
         if i % val_freq == 0:
-            test(model, test_loader, loss_fn1, loss_fn2, i, range_2_pcd)
+            test(model, test_loader, loss_fn1, loss_fn2, i, range_2_pcd, loss_fn3=loss_fn3)
         scheduler.step()
 
         checkpoint = {
@@ -102,8 +116,10 @@ def test(model,
          loss_fn1,
          loss_fn2,
          epoch,
-         range_2_pcd):
+         range_2_pcd,
+         loss_fn3):
     chamfer_losses = 0
+    bce_losses = 0
     l1_losses = 0
     data_count = 0
     model = model.eval()
@@ -115,11 +131,18 @@ def test(model,
             input_range = data['range_16'].to(device)
             label_range = data['range_64'].to(device)
             label_pcd = data['pcd_64'].to(device)
+            val_label = data['val_64'].to(torch.float32).to(device).reshape(label_pcd.shape[0], -1)
 
             curr_batch_size = input_range.shape[0]
             pred_range = model(input_range)
+            scaled_pred_range = pred_range * range_2_pcd.max_range
+            val_pred = torch.ones_like(scaled_pred_range).to(torch.float32)
+            val_pred[scaled_pred_range > range_2_pcd.max_range] = 0
+            val_pred[scaled_pred_range < range_2_pcd.min_range] = 0 
+            val_pred = val_pred.reshape(val_pred.shape[0], -1).to(device)
             pred_pcd = range_2_pcd.convert_range_to_pcd(pred_range.clone())
             chamfer_loss_val = loss_fn1(pred_pcd, label_pcd)[0]
+            bce_loss = loss_fn3(val_pred, val_label)
 
             if i % 20 == 0:
                 plot_3d(pred_pcd[0], range_2_pcd, "pred")
@@ -128,19 +151,21 @@ def test(model,
             l1_loss = loss_fn2(pred_range, label_range)
             chamfer_losses += chamfer_loss_val.item() * curr_batch_size
             l1_losses += l1_loss.item() * curr_batch_size
+            bce_losses += bce_loss.item() * curr_batch_size
             data_count += curr_batch_size
             torch.cuda.empty_cache()
 
-    print("\nEpoch {}: Test l1 loss: {}, Test chamfer loss {} \n".format(epoch,
+    print("\nEpoch {}: Test l1 loss: {}, Test chamfer loss {}, Test BCE loss {}, \n".format(epoch,
                                                                     round(l1_losses / data_count, 4),
-                                                                    round(chamfer_losses / data_count, 4)))
+                                                                    round(chamfer_losses / data_count, 4),
+                                                                    round(bce_losses / data_count)))
     wandb.log({"Test_l1_loss": l1_losses / data_count,
                 "Test_chamfer_loss": chamfer_losses / data_count,
                 "step": epoch})
     model = model.train()
 
 if __name__ == '__main__':
-    wandb.init(project="Super-Resolution-Chamfer")
+    wandb.init(project="Super-Resolution-Chamfer-pointnet-bce")
 
     parser = argparse.ArgumentParser(description="Super Res")
     parser.add_argument("--data_name",
@@ -151,6 +176,9 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size",
                         default=32,
                         type=int)
+    parser.add_argument("--model",
+                        choices=["normal", "pointnet"],
+                        default="normal")
     args = parser.parse_args()
 
     epochs = 20
@@ -158,26 +186,41 @@ if __name__ == '__main__':
     loss_fn1 = chamfer_distance
     loss_fn2 = nn.L1Loss()
     
-    model = Model()
-    range_2_pcd = RangeToPCD(image_rows=64)
-    model = model.to(device)
-    lr = args.lr
-    optimizer = torch.optim.Adam(model.parameters(), lr)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
-                                                     milestones=[2],
-                                                     gamma=0.1)
-
     if args.data_name == "ouster":
         print("Loading Ouster Dataset...")
         max_range = 80
+        range_2_pcd = RangeToPCD(64, 
+                                 ang_start_y=16.6,
+                                 max_range=80,
+                                 min_range=2,
+                                 fov_y=33.2)
         train_dataset = OusterLidar(is_train=True)
         test_dataset = OusterLidar(is_train=False)
+        loss_fn3 = nn.BCELoss()
     else:
         print("Loading VLP Dataset...")
+        range_2_pcd = RangeToPCD(image_rows=64)
         train_dataset = MyDatasetChamferDistance(is_chamfer=True,
                                                  is_train=True,)
         test_dataset = MyDatasetChamferDistance(is_chamfer=True,
                                                 is_train=False)
+
+    if args.model == "pointnet":
+        range_2_pcd_16 = RangeToPCD(16)
+        model = Model(is_pointnet=True,
+                      A=range_2_pcd_16.azimuth_image,
+                      E=range_2_pcd_16.elevation_image)
+        model = model.to(device)
+    else:
+        model = Model()
+        model = model.to(device)
+
+    lr = args.lr
+    optimizer = torch.optim.Adam(model.parameters(), lr)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
+                                                step_size=3,
+                                                gamma=0.1)
+    
     train_loader = DataLoader(train_dataset,
                               batch_size=batch_size,
                               shuffle=True,
@@ -195,4 +238,5 @@ if __name__ == '__main__':
           optimizer=optimizer,
           test_loader=test_loader,
           range_2_pcd=range_2_pcd,
-          scheduler=scheduler)
+          scheduler=scheduler,
+          loss_fn3=loss_fn3)

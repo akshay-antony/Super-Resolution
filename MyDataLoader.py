@@ -181,11 +181,13 @@ class OusterLidar(Dataset):
 
         range_16 = torch.from_numpy(range_16).type(torch.FloatTensor)
         range_64 = torch.from_numpy(range_64).type(torch.FloatTensor)
+        val_64 = torch.where(range_64 == 0, 0, 1)
         pcd_64 = torch.from_numpy(np.load(os.path.join(self.pcd_folder_name, 
                                                        str(index) + ".npy"))).type(torch.FloatTensor)
         return {"range_16": range_16,
                 "range_64": range_64,
-                "pcd_64": pcd_64}
+                "pcd_64": pcd_64,
+                "val_64": val_64}
 
     def __len__(self):
         return len(os.listdir(self.range_16_foldername))
